@@ -141,6 +141,84 @@ function parseRow(row) {
   return { key, author, reviewers };
 }
 
+// Injecte la feuille de style une seule fois.
+function injectStyles() {
+  if (document.getElementById('mrh-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'mrh-styles';
+  style.textContent = `
+    [data-mrh-state="seen"]   { opacity: .45; filter: grayscale(.6); }
+    [data-mrh-state="review"] { border-left: 3px solid #1f75cb !important;
+                                background: rgba(31,117,203,.06); }
+    [data-mrh-state="mine"]   { opacity: .6; }
+    .mrh-eye {
+      cursor: pointer; border: 0; background: transparent; font-size: 16px;
+      line-height: 1; padding: 2px 6px; margin-left: 8px; opacity: .55;
+    }
+    .mrh-eye:hover { opacity: 1; }
+    .mrh-eye[data-seen="1"] { opacity: 1; }
+    .mrh-bar {
+      display: flex; align-items: center; gap: 12px;
+      padding: 6px 12px; margin: 8px 0; font-size: 13px;
+      background: #fafafa; border: 1px solid #dbdbdb; border-radius: 4px;
+    }
+    .mrh-bar button {
+      cursor: pointer; padding: 3px 10px; border: 1px solid #dbdbdb;
+      border-radius: 4px; background: #fff;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+// Pose l'état visuel sur la ligne (no-op si déjà à jour, pour ne pas
+// déclencher inutilement le MutationObserver).
+function applyState(row, state) {
+  if (row.dataset.mrhState !== state) row.dataset.mrhState = state;
+}
+
+// Ajoute le bouton œil (une seule fois) sauf sur les MRs de l'utilisateur.
+function ensureEyeButton(row, mr, store, currentUser, rerender) {
+  if (currentUser && mr.author === currentUser) return;
+  let btn = row.querySelector('.mrh-eye');
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'mrh-eye';
+    btn.textContent = '\u{1F441}'; // 👁
+    btn.title = 'Marquer comme vue / annuler';
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      store.toggle(mr.key, Date.now());
+      rerender();
+    });
+    const titleLink = row.querySelector(SELECTORS.titleLink);
+    (titleLink && titleLink.parentElement ? titleLink.parentElement : row).appendChild(btn);
+  }
+  btn.dataset.seen = store.isSeen(mr.key) ? '1' : '0';
+}
+
+// Traite une ligne : extraction -> classification -> décoration.
+function processRow(row, store, currentUser, rerender) {
+  let mr;
+  try {
+    mr = parseRow(row);
+  } catch (e) {
+    return; // markup inattendu : on ignore cette ligne
+  }
+  if (!mr || !mr.key) return;
+  applyState(row, classifyMr(mr, currentUser, store.all()));
+  ensureEyeButton(row, mr, store, currentUser, rerender);
+}
+
+// Traite toutes les lignes visibles.
+function processList(store, currentUser) {
+  const rerender = () => processList(store, currentUser);
+  document.querySelectorAll(SELECTORS.row).forEach((row) => {
+    processRow(row, store, currentUser, rerender);
+  });
+}
+
 /* ------------------------------------------------------------------ *
  * Export pour les tests Node (ignoré par Tampermonkey)
  * ------------------------------------------------------------------ */
