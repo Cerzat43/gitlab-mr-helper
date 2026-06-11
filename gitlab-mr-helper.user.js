@@ -49,9 +49,33 @@ function classifyMr(mr, currentUser, seenMap) {
   return 'neutral';
 }
 
+// Crée un store des MRs vues au-dessus d'un adaptateur de stockage.
+// storage : { get(key, default), set(key, value) }
+function createSeenStore(storage) {
+  const STORAGE_KEY = 'seenMrs';
+  const load = () => storage.get(STORAGE_KEY, {}) || {};
+  const save = (map) => storage.set(STORAGE_KEY, map);
+  return {
+    all: () => load(),
+    isSeen: (mrKey) => Boolean(load()[mrKey]),
+    count: () => Object.keys(load()).length,
+    markSeen: (mrKey, now) => { const m = load(); m[mrKey] = now; save(m); },
+    unmarkSeen: (mrKey) => { const m = load(); delete m[mrKey]; save(m); },
+    toggle: (mrKey, now) => {
+      const m = load();
+      let nowSeen;
+      if (m[mrKey]) { delete m[mrKey]; nowSeen = false; }
+      else { m[mrKey] = now; nowSeen = true; }
+      save(m);
+      return nowSeen;
+    },
+    clear: () => save({}),
+  };
+}
+
 /* ------------------------------------------------------------------ *
  * Export pour les tests Node (ignoré par Tampermonkey)
  * ------------------------------------------------------------------ */
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { isMrListUrl, usernameFromHref, classifyMr };
+  module.exports = { isMrListUrl, usernameFromHref, classifyMr, createSeenStore };
 }
