@@ -27,9 +27,17 @@ function isMrListUrl(pathname) {
     || /^\/dashboard\/merge_requests\/?$/.test(pathname);
 }
 
+// Extrait le premier segment de chemin d'un href (= username GitLab).
+// Renvoie null si l'href est vide ou null.
+function usernameFromHref(href) {
+  if (!href) return null;
+  const match = href.match(/^\/?([^/?#]+)/);
+  return match ? match[1] : null;
+}
+
 /* ------------------------------------------------------------------ *
  * Export pour les tests Node (ignoré par Tampermonkey)
  * ------------------------------------------------------------------ */
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { isMrListUrl };
+  module.exports = { isMrListUrl, usernameFromHref };
 }
