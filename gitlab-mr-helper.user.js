@@ -219,6 +219,44 @@ function processList(store, currentUser) {
   });
 }
 
+// Met à jour le compteur de MRs vues (no-op si inchangé).
+function updateBar(store) {
+  const count = document.querySelector('.mrh-count');
+  if (!count) return;
+  const text = `${store.count()} MR(s) marquée(s) vue(s)`;
+  if (count.textContent !== text) count.textContent = text;
+}
+
+// Injecte la barre (une seule fois) au-dessus de la liste, puis la met à jour.
+function ensureResetBar(store, currentUser) {
+  let bar = document.querySelector('.mrh-bar');
+  if (!bar) {
+    const anchor = document.querySelector(SELECTORS.listContainer);
+    if (!anchor || !anchor.parentNode) return; // liste pas encore montée
+
+    bar = document.createElement('div');
+    bar.className = 'mrh-bar';
+
+    const count = document.createElement('span');
+    count.className = 'mrh-count';
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Réinitialiser les vues';
+    btn.addEventListener('click', () => {
+      if (window.confirm('Réinitialiser toutes les MRs marquées vues ?')) {
+        store.clear();
+        processList(store, currentUser);
+        updateBar(store);
+      }
+    });
+
+    bar.append(count, btn);
+    anchor.parentNode.insertBefore(bar, anchor);
+  }
+  updateBar(store);
+}
+
 /* ------------------------------------------------------------------ *
  * Export pour les tests Node (ignoré par Tampermonkey)
  * ------------------------------------------------------------------ */
