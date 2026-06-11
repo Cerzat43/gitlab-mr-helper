@@ -77,6 +77,37 @@ function createSeenStore(storage) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Couche navigateur (vérifiée manuellement sur gitlab.com)
+ * ------------------------------------------------------------------ */
+
+// Adaptateur branchant le store sur le stockage Tampermonkey.
+const gmStorage = {
+  get: (key, def) => GM_getValue(key, def),
+  set: (key, value) => GM_setValue(key, value),
+};
+
+// Détecte le username de l'utilisateur connecté.
+// 1) objet gon injecté par GitLab ; 2) fallback sur le menu utilisateur ;
+// 3) null si rien n'est trouvé (les états mine/review sont alors désactivés).
+function detectCurrentUser() {
+  try {
+    const g = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window).gon;
+    if (g && g.current_username) return g.current_username;
+  } catch (e) { /* gon inaccessible : on tente le fallback */ }
+
+  const menu = document.querySelector(
+    '[data-testid="user-menu-toggle"], .header-user-dropdown-toggle'
+  );
+  if (menu) {
+    const href = menu.getAttribute('href')
+      || (menu.querySelector('a') && menu.querySelector('a').getAttribute('href'));
+    const fromHref = usernameFromHref(href);
+    if (fromHref) return fromHref;
+  }
+  return null;
+}
+
+/* ------------------------------------------------------------------ *
  * Export pour les tests Node (ignoré par Tampermonkey)
  * ------------------------------------------------------------------ */
 if (typeof module !== 'undefined' && module.exports) {
