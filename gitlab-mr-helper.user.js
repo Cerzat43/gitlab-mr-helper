@@ -125,7 +125,15 @@ function parseRow(row) {
   const titleLink = row.querySelector(SELECTORS.titleLink);
   if (!titleLink || !titleLink.getAttribute('href')) return null;
 
-  const key = new URL(titleLink.href, location.origin).pathname;
+  // href pathologique (#, javascript:, vide résolu) -> on ignore la ligne
+  // plutôt que de stocker une clé inutile comme "/".
+  let key;
+  try {
+    key = new URL(titleLink.href, location.origin).pathname;
+  } catch (e) {
+    return null;
+  }
+  if (!key || key === '/') return null;
 
   const authorLink = row.querySelector(SELECTORS.authorLink);
   const author = authorLink ? usernameFromHref(authorLink.getAttribute('href')) : null;
