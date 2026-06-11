@@ -21,10 +21,14 @@
  * ------------------------------------------------------------------ */
 
 // Vrai uniquement sur les listes de MRs (projet, groupe, dashboard),
-// jamais sur une page de détail de MR.
+// jamais sur une page de détail de MR. Tolère un pathname seul, un
+// pathname avec query/fragment (ex. ?sort=created_date), ou une URL
+// absolue : on isole le pathname avant de tester.
 function isMrListUrl(pathname) {
-  return /\/-\/merge_requests\/?$/.test(pathname)
-    || /^\/dashboard\/merge_requests\/?$/.test(pathname);
+  let path = pathname;
+  try { path = new URL(pathname, 'http://x').pathname; } catch (e) { /* on garde tel quel */ }
+  return /\/-\/merge_requests\/?$/.test(path)
+    || /^\/dashboard\/merge_requests\/?$/.test(path);
 }
 
 // Extrait le premier segment de chemin d'un href (= username GitLab).
@@ -165,14 +169,24 @@ function injectStyles() {
     }
     .mrh-eye:hover { opacity: 1; }
     .mrh-eye[data-seen="1"] { opacity: 1; }
+    /* Couleurs via les design tokens GitLab (--gl-*) : s'adaptent au thème
+       clair/sombre. Les valeurs en repli servent si les tokens sont absents. */
     .mrh-bar {
       display: flex; align-items: center; gap: 12px;
       padding: 6px 12px; margin: 8px 0; font-size: 13px;
-      background: #fafafa; border: 1px solid #dbdbdb; border-radius: 4px;
+      color: var(--gl-text-color-default, #303030);
+      background: var(--gl-background-color-subtle, #fafafa);
+      border: 1px solid var(--gl-border-color-default, #dbdbdb);
+      border-radius: 4px;
     }
     .mrh-bar button {
-      cursor: pointer; padding: 3px 10px; border: 1px solid #dbdbdb;
-      border-radius: 4px; background: #fff;
+      cursor: pointer; padding: 3px 10px; border-radius: 4px;
+      color: var(--gl-text-color-default, #303030);
+      background: var(--gl-background-color-default, #fff);
+      border: 1px solid var(--gl-border-color-default, #dbdbdb);
+    }
+    .mrh-bar button:hover {
+      background: var(--gl-background-color-strong, #ececef);
     }
   `;
   document.head.appendChild(style);
