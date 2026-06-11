@@ -54,3 +54,8 @@ test('sans utilisateur courant -> neutral sauf si vue', () => {
   assert.strictEqual(classifyMr(mr({ author: 'x' }), null, {}), 'neutral');
   assert.strictEqual(classifyMr(mr({ key: KEY }), null, { [KEY]: 9 }), 'seen');
 });
+
+test('reviewers absent -> ne plante pas, retombe sur mine/neutral', () => {
+  assert.strictEqual(classifyMr({ key: '/k', author: 'me' }, 'me', {}), 'mine');
+  assert.strictEqual(classifyMr({ key: '/k', author: 'x' }, 'me', {}), 'neutral');
+});

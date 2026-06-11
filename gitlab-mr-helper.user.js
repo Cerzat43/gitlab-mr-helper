@@ -28,10 +28,13 @@ function isMrListUrl(pathname) {
 }
 
 // Extrait le premier segment de chemin d'un href (= username GitLab).
+// Accepte un chemin relatif (/alice) ou une URL absolue (https://gitlab.com/alice).
 // Renvoie null si l'href est vide ou null.
 function usernameFromHref(href) {
   if (!href) return null;
-  const match = href.match(/^\/?([^/?#]+)/);
+  let path = href;
+  try { path = new URL(href).pathname; } catch (e) { /* chemin relatif : on garde href tel quel */ }
+  const match = path.match(/^\/?([^/?#]+)/);
   return match ? match[1] : null;
 }
 
@@ -40,9 +43,9 @@ function usernameFromHref(href) {
 // - currentUser : username de l'utilisateur courant, ou null si inconnu
 // - seenMap   : objet { cléMR: timestamp }
 function classifyMr(mr, currentUser, seenMap) {
-  if (mr.key && seenMap && seenMap[mr.key]) return 'seen';
+  if (mr.key && seenMap && mr.key in seenMap) return 'seen';
   if (currentUser) {
-    const mine = mr.reviewers.find((r) => r.username === currentUser);
+    const mine = (mr.reviewers || []).find((r) => r.username === currentUser);
     if (mine && !mine.approved) return 'review';
     if (mr.author === currentUser) return 'mine';
   }

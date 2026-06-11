@@ -25,3 +25,11 @@ test('renvoie null pour un href vide', () => {
 test('renvoie null pour null', () => {
   assert.strictEqual(usernameFromHref(null), null);
 });
+
+test('extrait le username d\'une URL absolue', () => {
+  assert.strictEqual(usernameFromHref('https://gitlab.com/alice'), 'alice');
+});
+
+test('extrait le username d\'une URL absolue avec sous-chemin', () => {
+  assert.strictEqual(usernameFromHref('https://gitlab.com/bob/projet'), 'bob');
+});

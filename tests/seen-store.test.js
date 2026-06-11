@@ -7,7 +7,6 @@ function fakeStorage() {
   return {
     get: (k, d) => (k in data ? data[k] : d),
     set: (k, v) => { data[k] = v; },
-    _data: data,
   };
 }
 
