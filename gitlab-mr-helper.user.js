@@ -107,6 +107,40 @@ function detectCurrentUser() {
   return null;
 }
 
+// Sélecteurs dépendant du markup GitLab, centralisés pour faciliter
+// les mises à jour. À vérifier contre le DOM réel (cf. README/plan).
+const SELECTORS = {
+  listContainer: 'ul.mr-list, ul.issuable-list, [data-testid="issuable-list"]',
+  row: 'li.merge-request, li.issuable-row, [data-testid="issuable-item"]',
+  titleLink: '[data-testid="issuable-title-link"], .merge-request-title-text a, a.title',
+  authorLink: '[data-testid="issuable-author"], .author-link, .issuable-authored a',
+  reviewerLink: '[data-testid="reviewer-avatar-link"], .issuable-reviewers a.author-link',
+  // Indicateur « a approuvé » porté par/à proximité de l'avatar reviewer.
+  approvedMarker: '[data-testid="approval-solid-icon"], .gl-text-green-500, .ci-status-icon-success',
+};
+
+// Extrait les données d'une ligne de MR. Renvoie null si le markup est
+// inattendu (la ligne sera alors ignorée sans casser les autres).
+function parseRow(row) {
+  const titleLink = row.querySelector(SELECTORS.titleLink);
+  if (!titleLink || !titleLink.getAttribute('href')) return null;
+
+  const key = new URL(titleLink.href, location.origin).pathname;
+
+  const authorLink = row.querySelector(SELECTORS.authorLink);
+  const author = authorLink ? usernameFromHref(authorLink.getAttribute('href')) : null;
+
+  const reviewers = Array.from(row.querySelectorAll(SELECTORS.reviewerLink)).map((el) => ({
+    username: usernameFromHref(el.getAttribute('href')),
+    approved: Boolean(
+      el.querySelector(SELECTORS.approvedMarker)
+      || (el.parentElement && el.parentElement.querySelector(SELECTORS.approvedMarker))
+    ),
+  }));
+
+  return { key, author, reviewers };
+}
+
 /* ------------------------------------------------------------------ *
  * Export pour les tests Node (ignoré par Tampermonkey)
  * ------------------------------------------------------------------ */
