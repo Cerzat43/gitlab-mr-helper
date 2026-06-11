@@ -35,9 +35,23 @@ function usernameFromHref(href) {
   return match ? match[1] : null;
 }
 
+// Détermine l'état visuel d'une MR. Priorité : seen > review > mine > neutral.
+// - mr        : { key, author, reviewers: [{ username, approved }] }
+// - currentUser : username de l'utilisateur courant, ou null si inconnu
+// - seenMap   : objet { cléMR: timestamp }
+function classifyMr(mr, currentUser, seenMap) {
+  if (mr.key && seenMap && seenMap[mr.key]) return 'seen';
+  if (currentUser) {
+    const mine = mr.reviewers.find((r) => r.username === currentUser);
+    if (mine && !mine.approved) return 'review';
+    if (mr.author === currentUser) return 'mine';
+  }
+  return 'neutral';
+}
+
 /* ------------------------------------------------------------------ *
  * Export pour les tests Node (ignoré par Tampermonkey)
  * ------------------------------------------------------------------ */
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { isMrListUrl, usernameFromHref };
+  module.exports = { isMrListUrl, usernameFromHref, classifyMr };
 }
