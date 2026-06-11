@@ -257,9 +257,43 @@ function ensureResetBar(store, currentUser) {
   updateBar(store);
 }
 
+// Regroupe les appels rapprochés en un seul (anti-rebond).
+function debounce(fn, ms) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  };
+}
+
+// Point d'entrée navigateur.
+function main() {
+  if (!isMrListUrl(location.pathname)) return;
+
+  const currentUser = detectCurrentUser();
+  const store = createSeenStore(gmStorage);
+  injectStyles();
+
+  const run = () => {
+    ensureResetBar(store, currentUser);
+    processList(store, currentUser);
+  };
+
+  // La liste est rendue/re-rendue par Vue.js (filtres, onglets, pagination).
+  // On ne surveille que childList (ajouts/retraits de lignes) : nos propres
+  // changements d'attributs ne re-déclenchent donc pas l'observer, et les
+  // gardes d'idempotence évitent toute boucle.
+  const observer = new MutationObserver(debounce(run, 150));
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  run();
+}
+
 /* ------------------------------------------------------------------ *
- * Export pour les tests Node (ignoré par Tampermonkey)
+ * Export (tests Node) / Bootstrap (navigateur)
  * ------------------------------------------------------------------ */
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { isMrListUrl, usernameFromHref, classifyMr, createSeenStore };
+} else if (typeof window !== 'undefined') {
+  main();
 }
