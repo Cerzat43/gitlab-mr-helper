@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitLab MR Helper
 // @namespace    https://github.com/Cerzat43/gitlab-mr-helper
-// @version      0.2.0
+// @version      0.2.1
 // @description  Marque les MRs comme vues (grisées), remet en avant celles qui ont bougé depuis, et met en retrait les vôtres.
 // @author       Cerzat43
 // @homepageURL  https://github.com/Cerzat43/gitlab-mr-helper
