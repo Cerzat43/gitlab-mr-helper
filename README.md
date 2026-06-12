@@ -15,6 +15,27 @@ Aucun appel API, aucun token : tout se base sur le contenu de la page. Le suivi
 
 Dépôt : <https://github.com/Cerzat43/gitlab-mr-helper>
 
+## Fonctionnement
+
+Un bouton œil (👁) est ajouté à chaque ligne de MR (sauf les vôtres). Cliquer
+marque la MR comme « vue » et **mémorise sa date de dernière activité**. Le
+re-clic annule ; si la MR a bougé entre-temps, le clic ré-acquitte avec la
+nouvelle date. Une barre au-dessus de la liste affiche le nombre de MRs vues et
+un bouton **« Réinitialiser les vues »**.
+
+Chaque ligne reçoit un état visuel (par ordre de priorité) :
+
+| État | Condition | Rendu |
+|------|-----------|-------|
+| **Prête à merger** | approuvée **et** sans label bloquant (`Status::*`, `Don't merge`) | bordure + fond **verts** |
+| **Changée** | marquée vue **mais** activité depuis (date de MAJ différente) | bordure + fond **ambre** |
+| **Vue** | marquée vue, inchangée | ligne **grisée** |
+| **Ma MR** | vous en êtes l'auteur | en retrait + accent pointillé |
+| Neutre | aucun des cas ci-dessus | inchangé |
+
+« Approuvée » inclut le cas où **vous** avez approuvé. La liste des labels
+bloquants est centralisée dans la fonction `isBlockingLabel` du script.
+
 ## Installation
 
 1. Installer l'extension Tampermonkey dans votre navigateur.
