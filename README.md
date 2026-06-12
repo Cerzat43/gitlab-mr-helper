@@ -24,6 +24,11 @@ re-clic annule ; si la MR a bougé entre-temps, le clic ré-acquitte avec la
 nouvelle date. Une barre au-dessus de la liste affiche le nombre de MRs vues et
 un bouton **« Réinitialiser les vues »**.
 
+Les marques « vue » expirent au bout de **90 jours** (purge du seul stockage
+local — le script ne supprime, ne masque ni ne déplace jamais une MR). Une MR
+encore ouverte dont la marque a expiré **perd simplement son grisé** et
+redevient une ligne normale.
+
 Chaque ligne reçoit un état visuel (par ordre de priorité) :
 
 | État | Condition | Rendu |

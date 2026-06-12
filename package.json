@@ -1,6 +1,6 @@
 {
   "name": "gitlab-mr-helper",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Userscript Tampermonkey pour faciliter la review des merge requests GitLab",
   "private": true,
   "scripts": {

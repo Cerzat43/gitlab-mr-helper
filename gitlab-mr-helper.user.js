@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitLab MR Helper
 // @namespace    https://github.com/Cerzat43/gitlab-mr-helper
-// @version      0.2.2
+// @version      0.2.3
 // @description  Marque les MRs comme vues (grisées), remet en avant celles qui ont bougé depuis, et met en retrait les vôtres.
 // @author       Cerzat43
 // @homepageURL  https://github.com/Cerzat43/gitlab-mr-helper
@@ -67,31 +67,53 @@ function isBlockingLabel(name) {
 function classifyMr(mr, currentUser, seenMap) {
   if (mr.approved && !(mr.labels || []).some(isBlockingLabel)) return 'ready';
   if (mr.key && seenMap && mr.key in seenMap) {
-    return seenMap[mr.key] === mr.updateToken ? 'seen' : 'changed';
+    const stored = seenMap[mr.key];
+    // Forme actuelle : { token, seenAt } ; forme legacy : le token nu (string).
+    const token = (stored && typeof stored === 'object') ? stored.token : stored;
+    return token === mr.updateToken ? 'seen' : 'changed';
   }
   if (currentUser && mr.author === currentUser) return 'mine';
   return 'neutral';
 }
 
 // Crée un store des MRs vues au-dessus d'un adaptateur de stockage.
-// La valeur mémorisée par MR est son jeton de dernière activité (updateToken).
+// Valeur mémorisée par MR : { token, seenAt } — token = jeton de dernière
+// activité au moment du marquage ; seenAt = date (ms) du marquage, utilisée
+// pour l'expiration. (Ancien format = token nu en string ; toléré en lecture
+// et migré par prune().)
 // storage : { get(key, default), set(key, value) }
 function createSeenStore(storage) {
   const STORAGE_KEY = 'seenMrs';
   const load = () => storage.get(STORAGE_KEY, {}) || {};
   const save = (map) => storage.set(STORAGE_KEY, map);
+  const tokenOf = (e) => (e && typeof e === 'object') ? e.token : e;
   return {
     all: () => load(),
     isSeen: (mrKey) => mrKey in load(),
     count: () => Object.keys(load()).length,
-    markSeen: (mrKey, token) => { const m = load(); m[mrKey] = token; save(m); },
+    markSeen: (mrKey, token, now) => { const m = load(); m[mrKey] = { token, seenAt: now }; save(m); },
     unmarkSeen: (mrKey) => { const m = load(); delete m[mrKey]; save(m); },
     // toggle sensible au jeton : même jeton -> on désélectionne ; jeton
-    // différent (la MR a bougé) -> on ré-acquitte avec le nouveau jeton.
-    toggle: (mrKey, token) => {
+    // différent (la MR a bougé) -> on ré-acquitte avec le nouveau jeton et on
+    // rafraîchit seenAt (le compteur d'expiration repart).
+    toggle: (mrKey, token, now) => {
       const m = load();
-      if (m[mrKey] === token) { delete m[mrKey]; save(m); return false; }
-      m[mrKey] = token; save(m); return true;
+      if (tokenOf(m[mrKey]) === token) { delete m[mrKey]; save(m); return false; }
+      m[mrKey] = { token, seenAt: now }; save(m); return true;
+    },
+    // Purge les entrées marquées il y a plus de ttlMs. Migre au passage les
+    // entrées legacy (string) en leur attribuant seenAt = now. Renvoie la map
+    // après purge ; n'écrit que si quelque chose a changé.
+    prune: (now, ttlMs) => {
+      const m = load();
+      let changed = false;
+      for (const k of Object.keys(m)) {
+        let e = m[k];
+        if (e && typeof e !== 'object') { e = { token: e, seenAt: now }; m[k] = e; changed = true; }
+        if (e && typeof e.seenAt === 'number' && (now - e.seenAt) > ttlMs) { delete m[k]; changed = true; }
+      }
+      if (changed) save(m);
+      return m;
     },
     clear: () => save({}),
   };
@@ -269,7 +291,7 @@ function ensureEyeButton(row, mr, state, store, currentUser, rerender) {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      store.toggle(mr.key, mr.updateToken);
+      store.toggle(mr.key, mr.updateToken, Date.now());
       rerender();
     });
     const titleLink = row.querySelector(SELECTORS.titleLink);
@@ -347,12 +369,17 @@ function debounce(fn, ms) {
   };
 }
 
+// Durée de vie d'une marque « vue » : au-delà, l'entrée est purgée et la MR
+// (si toujours présente) redevient « neutral » — re-surfacée pour re-revue.
+const SEEN_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 jours
+
 // Point d'entrée navigateur.
 function main() {
   if (!isMrListUrl(location.pathname)) return;
 
   const currentUser = detectCurrentUser();
   const store = createSeenStore(gmStorage);
+  store.prune(Date.now(), SEEN_TTL_MS); // purge des marques « vues » périmées
   injectStyles();
 
   const run = () => {

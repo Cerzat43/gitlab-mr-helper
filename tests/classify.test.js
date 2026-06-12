@@ -48,6 +48,11 @@ test('token stocké vide ("") est respecté comme une vue valide', () => {
   assert.strictEqual(classifyMr(mr({ updateToken: '' }), 'me', { [KEY]: '' }), 'seen');
 });
 
+test('lit le token depuis la forme objet { token, seenAt } (nouveau format)', () => {
+  assert.strictEqual(classifyMr(mr({}), 'me', { [KEY]: { token: TOKEN, seenAt: 123 } }), 'seen');
+  assert.strictEqual(classifyMr(mr({ updateToken: 'neuf' }), 'me', { [KEY]: { token: TOKEN, seenAt: 123 } }), 'changed');
+});
+
 test('prête à merger : approuvée + aucun label bloquant -> ready', () => {
   // labels de catégorie non bloquants
   assert.strictEqual(classifyMr(mr({ approved: true, labels: ['Bug', 'SEO', 'Deploy::Release'], author: 'x' }), 'me', {}), 'ready');
