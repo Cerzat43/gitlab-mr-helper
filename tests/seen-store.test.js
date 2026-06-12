@@ -37,12 +37,22 @@ test('unmarkSeen retire l\'entrée', () => {
   assert.strictEqual(store.count(), 0);
 });
 
-test('toggle bascule l\'état et renvoie le nouvel état', () => {
+test('toggle avec le MÊME token bascule l\'état (marque puis annule)', () => {
   const store = createSeenStore(fakeStorage());
-  assert.strictEqual(store.toggle('/a', 111), true);
+  assert.strictEqual(store.toggle('/a', 'tok-1'), true);
   assert.strictEqual(store.isSeen('/a'), true);
-  assert.strictEqual(store.toggle('/a', 222), false);
+  assert.strictEqual(store.all()['/a'], 'tok-1');
+  assert.strictEqual(store.toggle('/a', 'tok-1'), false);
   assert.strictEqual(store.isSeen('/a'), false);
+});
+
+test('toggle avec un token DIFFÉRENT ré-acquitte avec le nouveau token (cas « changé »)', () => {
+  const store = createSeenStore(fakeStorage());
+  store.toggle('/a', 'tok-1');
+  // la MR a bougé : nouveau token -> on ré-acquitte plutôt que de désélectionner
+  assert.strictEqual(store.toggle('/a', 'tok-2'), true);
+  assert.strictEqual(store.isSeen('/a'), true);
+  assert.strictEqual(store.all()['/a'], 'tok-2');
 });
 
 test('clear vide tout', () => {

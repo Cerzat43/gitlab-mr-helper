@@ -1,61 +1,83 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { classifyMr } = require('../gitlab-mr-helper.user.js');
+const { classifyMr, isBlockingLabel } = require('../gitlab-mr-helper.user.js');
 
 const KEY = '/grp/proj/-/merge_requests/1';
+const TOKEN = 'jeudi 11 juin 2026 à 17:33:25 UTC+2';
 
 function mr(over) {
-  return Object.assign({ key: KEY, author: 'someone', reviewers: [] }, over);
+  // Par défaut : non approuvée, avec un label bloquant -> jamais « ready ».
+  return Object.assign(
+    { key: KEY, author: 'someone', updateToken: TOKEN, approved: false, labels: ['Status::Needs review'] },
+    over
+  );
 }
 
-test('vue : présente dans seenMap -> seen (prioritaire)', () => {
-  const state = classifyMr(mr({ author: 'me' }), 'me', { [KEY]: 123 });
+test('vue : marquée avec le même token -> seen', () => {
+  const state = classifyMr(mr({}), 'me', { [KEY]: TOKEN });
   assert.strictEqual(state, 'seen');
 });
 
-test('à reviewer : reviewer non approuvé -> review', () => {
-  const state = classifyMr(
-    mr({ reviewers: [{ username: 'me', approved: false }] }),
-    'me',
-    {}
-  );
-  assert.strictEqual(state, 'review');
+test('changée : marquée mais token différent -> changed', () => {
+  const state = classifyMr(mr({ updateToken: 'token-plus-recent' }), 'me', { [KEY]: TOKEN });
+  assert.strictEqual(state, 'changed');
 });
 
-test('reviewer ayant déjà approuvé -> pas review', () => {
-  const state = classifyMr(
-    mr({ author: 'x', reviewers: [{ username: 'me', approved: true }] }),
-    'me',
-    {}
-  );
-  assert.strictEqual(state, 'neutral');
-});
-
-test('ma MR : auteur courant -> mine', () => {
+test('ma MR : auteur courant, pas marquée -> mine', () => {
   const state = classifyMr(mr({ author: 'me' }), 'me', {});
   assert.strictEqual(state, 'mine');
 });
 
-test('priorité review sur mine quand les deux s\'appliquent', () => {
-  const state = classifyMr(
-    mr({ author: 'me', reviewers: [{ username: 'me', approved: false }] }),
-    'me',
-    {}
-  );
-  assert.strictEqual(state, 'review');
-});
-
-test('aucun cas -> neutral', () => {
-  const state = classifyMr(mr({ author: 'x', reviewers: [{ username: 'y', approved: false }] }), 'me', {});
+test('autre MR non marquée -> neutral', () => {
+  const state = classifyMr(mr({ author: 'x' }), 'me', {});
   assert.strictEqual(state, 'neutral');
 });
 
-test('sans utilisateur courant -> neutral sauf si vue', () => {
-  assert.strictEqual(classifyMr(mr({ author: 'x' }), null, {}), 'neutral');
-  assert.strictEqual(classifyMr(mr({ key: KEY }), null, { [KEY]: 9 }), 'seen');
+test('seen/changed priment sur mine quand une MR marquée appartient à l\'auteur courant', () => {
+  assert.strictEqual(classifyMr(mr({ author: 'me' }), 'me', { [KEY]: TOKEN }), 'seen');
+  assert.strictEqual(classifyMr(mr({ author: 'me', updateToken: 'autre' }), 'me', { [KEY]: TOKEN }), 'changed');
 });
 
-test('reviewers absent -> ne plante pas, retombe sur mine/neutral', () => {
-  assert.strictEqual(classifyMr({ key: '/k', author: 'me' }, 'me', {}), 'mine');
-  assert.strictEqual(classifyMr({ key: '/k', author: 'x' }, 'me', {}), 'neutral');
+test('sans utilisateur courant : mine désactivé, mais seen/changed restent', () => {
+  assert.strictEqual(classifyMr(mr({ author: 'x' }), null, {}), 'neutral');
+  assert.strictEqual(classifyMr(mr({}), null, { [KEY]: TOKEN }), 'seen');
+  assert.strictEqual(classifyMr(mr({ updateToken: 'autre' }), null, { [KEY]: TOKEN }), 'changed');
+});
+
+test('token stocké vide ("") est respecté comme une vue valide', () => {
+  assert.strictEqual(classifyMr(mr({ updateToken: '' }), 'me', { [KEY]: '' }), 'seen');
+});
+
+test('prête à merger : approuvée + aucun label bloquant -> ready', () => {
+  // labels de catégorie non bloquants
+  assert.strictEqual(classifyMr(mr({ approved: true, labels: ['Bug', 'SEO', 'Deploy::Release'], author: 'x' }), 'me', {}), 'ready');
+  // zéro label tout court
+  assert.strictEqual(classifyMr(mr({ approved: true, labels: [], author: 'x' }), 'me', {}), 'ready');
+});
+
+test('ready prime sur seen, changed et mine', () => {
+  assert.strictEqual(classifyMr(mr({ approved: true, labels: [], author: 'me' }), 'me', { [KEY]: TOKEN }), 'ready');
+  assert.strictEqual(classifyMr(mr({ approved: true, labels: [], updateToken: 'neuf' }), 'me', { [KEY]: TOKEN }), 'ready');
+});
+
+test('pas ready si un label bloquant reste (Status::* ou Don\'t merge)', () => {
+  assert.strictEqual(classifyMr(mr({ approved: true, labels: ['Status::To be tested'], author: 'x' }), 'me', {}), 'neutral');
+  assert.strictEqual(classifyMr(mr({ approved: true, labels: ['Bug', "Don't merge"], author: 'x' }), 'me', {}), 'neutral');
+});
+
+test('pas ready si aucun label bloquant mais non approuvée', () => {
+  assert.strictEqual(classifyMr(mr({ approved: false, labels: [], author: 'x' }), 'me', {}), 'neutral');
+});
+
+test('isBlockingLabel : Status::* et Don\'t merge bloquent, le reste non', () => {
+  assert.strictEqual(isBlockingLabel('Status::Needs review'), true);
+  assert.strictEqual(isBlockingLabel('Status::Work In Progress'), true);
+  assert.strictEqual(isBlockingLabel('Status::To be tested'), true);
+  assert.strictEqual(isBlockingLabel("Don't merge"), true);
+  assert.strictEqual(isBlockingLabel('Dont merge'), true);          // apostrophe absente toléré
+  assert.strictEqual(isBlockingLabel('Deploy::Release'), false);
+  assert.strictEqual(isBlockingLabel('Deploy::Hotfix'), false);
+  assert.strictEqual(isBlockingLabel('Bug'), false);
+  assert.strictEqual(isBlockingLabel('SEO'), false);
+  assert.strictEqual(isBlockingLabel('Documentation'), false);
 });

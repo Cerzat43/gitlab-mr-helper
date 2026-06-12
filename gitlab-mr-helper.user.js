@@ -2,7 +2,7 @@
 // @name         GitLab MR Helper
 // @namespace    https://github.com/Cerzat43/gitlab-mr-helper
 // @version      0.1.0
-// @description  Met en avant les MRs à reviewer, met en retrait les vôtres, et permet de marquer les MRs comme vues.
+// @description  Marque les MRs comme vues (grisées), remet en avant celles qui ont bougé depuis, et met en retrait les vôtres.
 // @author       Cerzat43
 // @homepageURL  https://github.com/Cerzat43/gitlab-mr-helper
 // @supportURL   https://github.com/Cerzat43/gitlab-mr-helper/issues
@@ -42,21 +42,37 @@ function usernameFromHref(href) {
   return match ? match[1] : null;
 }
 
-// Détermine l'état visuel d'une MR. Priorité : seen > review > mine > neutral.
-// - mr        : { key, author, reviewers: [{ username, approved }] }
+// Labels qui empêchent une MR d'être considérée « prête à merger » :
+// tout label scoped « Status::… » et le label « Don't merge » (apostrophe
+// typographique ou absente tolérées). Les autres labels (catégorie, Deploy::…)
+// ne bloquent pas.
+function isBlockingLabel(name) {
+  if (!name) return false;
+  if (/^status::/i.test(name)) return true;
+  return /^don['’]?t\s+merge$/i.test(name);
+}
+
+// Détermine l'état visuel d'une MR. Priorité : ready > seen/changed > mine > neutral.
+//   - 'ready'   : approuvée ET sans aucun label bloquant -> prête à merger (vert)
+//   - le marquage « vue » mémorise le jeton de dernière activité (updateToken) :
+//       jeton identique -> 'seen' (rien n'a bougé, on grise)
+//       jeton différent -> 'changed' (activité depuis la dernière vue, mise en avant ambre)
+//   - 'mine'    : l'utilisateur courant est l'auteur (en retrait)
+//   - 'neutral' : aucun des cas ci-dessus
+// - mr          : { key, author, updateToken, approved, labels: [string] }
 // - currentUser : username de l'utilisateur courant, ou null si inconnu
-// - seenMap   : objet { cléMR: timestamp }
+// - seenMap     : objet { cléMR: updateToken mémorisé }
 function classifyMr(mr, currentUser, seenMap) {
-  if (mr.key && seenMap && mr.key in seenMap) return 'seen';
-  if (currentUser) {
-    const mine = (mr.reviewers || []).find((r) => r.username === currentUser);
-    if (mine && !mine.approved) return 'review';
-    if (mr.author === currentUser) return 'mine';
+  if (mr.approved && !(mr.labels || []).some(isBlockingLabel)) return 'ready';
+  if (mr.key && seenMap && mr.key in seenMap) {
+    return seenMap[mr.key] === mr.updateToken ? 'seen' : 'changed';
   }
+  if (currentUser && mr.author === currentUser) return 'mine';
   return 'neutral';
 }
 
 // Crée un store des MRs vues au-dessus d'un adaptateur de stockage.
+// La valeur mémorisée par MR est son jeton de dernière activité (updateToken).
 // storage : { get(key, default), set(key, value) }
 function createSeenStore(storage) {
   const STORAGE_KEY = 'seenMrs';
@@ -64,17 +80,16 @@ function createSeenStore(storage) {
   const save = (map) => storage.set(STORAGE_KEY, map);
   return {
     all: () => load(),
-    isSeen: (mrKey) => Boolean(load()[mrKey]),
+    isSeen: (mrKey) => mrKey in load(),
     count: () => Object.keys(load()).length,
-    markSeen: (mrKey, now) => { const m = load(); m[mrKey] = now; save(m); },
+    markSeen: (mrKey, token) => { const m = load(); m[mrKey] = token; save(m); },
     unmarkSeen: (mrKey) => { const m = load(); delete m[mrKey]; save(m); },
-    toggle: (mrKey, now) => {
+    // toggle sensible au jeton : même jeton -> on désélectionne ; jeton
+    // différent (la MR a bougé) -> on ré-acquitte avec le nouveau jeton.
+    toggle: (mrKey, token) => {
       const m = load();
-      let nowSeen;
-      if (m[mrKey]) { delete m[mrKey]; nowSeen = false; }
-      else { m[mrKey] = now; nowSeen = true; }
-      save(m);
-      return nowSeen;
+      if (m[mrKey] === token) { delete m[mrKey]; save(m); return false; }
+      m[mrKey] = token; save(m); return true;
     },
     clear: () => save({}),
   };
@@ -112,16 +127,44 @@ function detectCurrentUser() {
 }
 
 // Sélecteurs dépendant du markup GitLab, centralisés pour faciliter
-// les mises à jour. À vérifier contre le DOM réel (cf. README/plan).
+// les mises à jour. Validés sur gitlab.com (le 1er de chaque liste est
+// celui réellement observé ; les suivants sont des replis défensifs).
 const SELECTORS = {
-  listContainer: 'ul.mr-list, ul.issuable-list, [data-testid="issuable-list"]',
+  listContainer: 'ul.issuable-list, ul.mr-list, [data-testid="issuable-list"]',
   row: 'li.merge-request, li.issuable-row, [data-testid="issuable-item"]',
   titleLink: '[data-testid="issuable-title-link"], .merge-request-title-text a, a.title',
-  authorLink: '[data-testid="issuable-author"], .author-link, .issuable-authored a',
-  reviewerLink: '[data-testid="reviewer-avatar-link"], .issuable-reviewers a.author-link',
-  // Indicateur « a approuvé » porté par/à proximité de l'avatar reviewer.
-  approvedMarker: '[data-testid="approval-solid-icon"], .gl-text-green-500, .ci-status-icon-success',
+  authorLink: '[data-testid="issuable-author"], .author-link',
+  // Horodatage de dernière activité : un bouton dont le title/aria-label
+  // porte la date absolue (texte visible = relatif « mis à jour il y a … »).
+  timestamp: '[data-testid="issuable-timestamp"]',
+  // Approbation : icône check-circle dans le widget d'approbation = approuvée.
+  approvedIcon: '[data-testid="mr-approvals"] [data-testid="check-circle-icon"]',
+  // Labels de la ligne (un lien par label).
+  label: 'a.gl-label-link, a[href*="label_name"]',
 };
+
+// Lit le jeton de dernière activité d'une ligne : la date absolue portée par
+// le title/aria-label de l'horodatage. Sert de marqueur de version opaque
+// (comparaison de chaînes, pas de parsing de date). null si introuvable.
+function updateTokenFromRow(row) {
+  const el = row.querySelector(SELECTORS.timestamp);
+  if (!el) return null;
+  return el.getAttribute('title') || el.getAttribute('aria-label') || null;
+}
+
+// Liste les noms exacts des labels d'une ligne. Le nom complet (incl. le
+// scope « Status::… ») est lu depuis le paramètre `label_name[]` du href du
+// lien, plus fiable que le texte affiché ; repli sur le texte normalisé.
+function labelNamesFromRow(row) {
+  return Array.from(row.querySelectorAll(SELECTORS.label)).map((a) => {
+    try {
+      const fromQuery = new URL(a.getAttribute('href') || '', location.origin)
+        .searchParams.get('label_name[]');
+      if (fromQuery) return fromQuery;
+    } catch (e) { /* href non parsable : on retombe sur le texte */ }
+    return (a.textContent || '').replace(/\s+/g, ' ').trim();
+  }).filter(Boolean);
+}
 
 // Extrait les données d'une ligne de MR. Renvoie null si le markup est
 // inattendu (la ligne sera alors ignorée sans casser les autres).
@@ -142,15 +185,13 @@ function parseRow(row) {
   const authorLink = row.querySelector(SELECTORS.authorLink);
   const author = authorLink ? usernameFromHref(authorLink.getAttribute('href')) : null;
 
-  const reviewers = Array.from(row.querySelectorAll(SELECTORS.reviewerLink)).map((el) => ({
-    username: usernameFromHref(el.getAttribute('href')),
-    approved: Boolean(
-      el.querySelector(SELECTORS.approvedMarker)
-      || (el.parentElement && el.parentElement.querySelector(SELECTORS.approvedMarker))
-    ),
-  }));
-
-  return { key, author, reviewers };
+  return {
+    key,
+    author,
+    updateToken: updateTokenFromRow(row),
+    approved: Boolean(row.querySelector(SELECTORS.approvedIcon)),
+    labels: labelNamesFromRow(row),
+  };
 }
 
 // Injecte la feuille de style une seule fois.
@@ -159,10 +200,16 @@ function injectStyles() {
   const style = document.createElement('style');
   style.id = 'mrh-styles';
   style.textContent = `
-    [data-mrh-state="seen"]   { opacity: .45; filter: grayscale(.6); }
-    [data-mrh-state="review"] { border-left: 3px solid #1f75cb !important;
-                                background: rgba(31,117,203,.06); }
-    [data-mrh-state="mine"]   { opacity: .6; }
+    [data-mrh-state="seen"]    { opacity: .45; filter: grayscale(.6); }
+    /* « ready » = approuvée + sans label -> prête à merger (vert). */
+    [data-mrh-state="ready"]   { border-left: 3px solid #108548 !important;
+                                 background: rgba(16,133,72,.10); }
+    /* « changed » = activité depuis la dernière vue -> mise en avant (ambre). */
+    [data-mrh-state="changed"] { border-left: 3px solid #c17d10 !important;
+                                 background: rgba(193,125,16,.10); }
+    /* « mine » = mes propres MRs : en retrait + accent pointillé distinct. */
+    [data-mrh-state="mine"]    { opacity: .6;
+                                 border-left: 3px dashed var(--gl-border-color-strong, #b3b3b3) !important; }
     .mrh-eye {
       cursor: pointer; border: 0; background: transparent; font-size: 16px;
       line-height: 1; padding: 2px 6px; margin-left: 8px; opacity: .55;
@@ -207,11 +254,11 @@ function ensureEyeButton(row, mr, store, currentUser, rerender) {
     btn.type = 'button';
     btn.className = 'mrh-eye';
     btn.textContent = '\u{1F441}'; // 👁
-    btn.title = 'Marquer comme vue / annuler';
+    btn.title = 'Marquer comme vue / annuler (re-cliquer après une nouvelle activité ré-acquitte)';
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      store.toggle(mr.key, Date.now());
+      store.toggle(mr.key, mr.updateToken);
       rerender();
     });
     const titleLink = row.querySelector(SELECTORS.titleLink);
@@ -315,7 +362,7 @@ function main() {
  * Export (tests Node) / Bootstrap (navigateur)
  * ------------------------------------------------------------------ */
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { isMrListUrl, usernameFromHref, classifyMr, createSeenStore };
+  module.exports = { isMrListUrl, usernameFromHref, classifyMr, createSeenStore, isBlockingLabel };
 } else if (typeof window !== 'undefined') {
   main();
 }
