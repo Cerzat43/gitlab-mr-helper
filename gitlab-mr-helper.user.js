@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitLab MR Helper
 // @namespace    https://github.com/Cerzat43/gitlab-mr-helper
-// @version      0.2.1
+// @version      0.2.2
 // @description  Marque les MRs comme vues (grisées), remet en avant celles qui ont bougé depuis, et met en retrait les vôtres.
 // @author       Cerzat43
 // @homepageURL  https://github.com/Cerzat43/gitlab-mr-helper
@@ -249,10 +249,17 @@ function applyState(row, state) {
   if (row.dataset.mrhState !== state) row.dataset.mrhState = state;
 }
 
-// Ajoute le bouton œil (une seule fois) sauf sur les MRs de l'utilisateur.
-function ensureEyeButton(row, mr, store, currentUser, rerender) {
-  if (currentUser && mr.author === currentUser) return;
+// Gère le bouton œil de la ligne. Pas d'œil quand il serait inutile :
+// sur les MRs de l'utilisateur, et sur les MRs « ready » (on les merge, on
+// ne les « voit » pas — et ready prime de toute façon sur seen). Si l'œil
+// existait et n'a plus lieu d'être (ex. la MR devient ready), on le retire.
+function ensureEyeButton(row, mr, state, store, currentUser, rerender) {
+  const suppressed = state === 'ready' || (currentUser && mr.author === currentUser);
   let btn = row.querySelector('.mrh-eye');
+  if (suppressed) {
+    if (btn) btn.remove();
+    return;
+  }
   if (!btn) {
     btn = document.createElement('button');
     btn.type = 'button';
@@ -280,8 +287,9 @@ function processRow(row, store, currentUser, rerender) {
     return; // markup inattendu : on ignore cette ligne
   }
   if (!mr || !mr.key) return;
-  applyState(row, classifyMr(mr, currentUser, store.all()));
-  ensureEyeButton(row, mr, store, currentUser, rerender);
+  const state = classifyMr(mr, currentUser, store.all());
+  applyState(row, state);
+  ensureEyeButton(row, mr, state, store, currentUser, rerender);
 }
 
 // Traite toutes les lignes visibles.
