@@ -81,3 +81,9 @@ test('isBlockingLabel : Status::* et Don\'t merge bloquent, le reste non', () =>
   assert.strictEqual(isBlockingLabel('SEO'), false);
   assert.strictEqual(isBlockingLabel('Documentation'), false);
 });
+
+test('isBlockingLabel : tolère les préfixes décoratifs (emoji/✗) des labels webedia', () => {
+  assert.strictEqual(isBlockingLabel("✗ Don't merge"), true);       // nom réel du label webedia
+  assert.strictEqual(isBlockingLabel('Status::📁 Needs review'), true);
+  assert.strictEqual(isBlockingLabel('📁 Documentation'), false);   // déco mais non bloquant
+});

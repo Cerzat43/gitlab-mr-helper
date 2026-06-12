@@ -43,13 +43,15 @@ function usernameFromHref(href) {
 }
 
 // Labels qui empêchent une MR d'être considérée « prête à merger » :
-// tout label scoped « Status::… » et le label « Don't merge » (apostrophe
-// typographique ou absente tolérées). Les autres labels (catégorie, Deploy::…)
-// ne bloquent pas.
+// tout label scoped « Status::… » et le label « Don't merge ». Les libellés
+// webedia portent souvent un préfixe décoratif (ex. « ✗ Don't merge »,
+// « Status::📁 Needs review ») : on retire les caractères non-alphabétiques
+// de tête avant de tester. Apostrophe droite/typographique/absente tolérées.
+// Les autres labels (catégorie, Deploy::…) ne bloquent pas.
 function isBlockingLabel(name) {
   if (!name) return false;
-  if (/^status::/i.test(name)) return true;
-  return /^don['’]?t\s+merge$/i.test(name);
+  const n = String(name).replace(/^[^\p{L}]+/u, '').toLowerCase();
+  return n.startsWith('status::') || /^don['’]?t\s+merge/.test(n);
 }
 
 // Détermine l'état visuel d'une MR. Priorité : ready > seen/changed > mine > neutral.
@@ -137,8 +139,10 @@ const SELECTORS = {
   // Horodatage de dernière activité : un bouton dont le title/aria-label
   // porte la date absolue (texte visible = relatif « mis à jour il y a … »).
   timestamp: '[data-testid="issuable-timestamp"]',
-  // Approbation : icône check-circle dans le widget d'approbation = approuvée.
-  approvedIcon: '[data-testid="mr-approvals"] [data-testid="check-circle-icon"]',
+  // Approbation : le widget porte une icône check-circle (approuvée) ou
+  // approval-solid (approuvée, dont par l'utilisateur courant). dash-circle =
+  // non approuvée. On considère les deux premières comme « approuvée ».
+  approvedIcon: '[data-testid="mr-approvals"] [data-testid="check-circle-icon"], [data-testid="mr-approvals"] [data-testid="approval-solid-icon"]',
   // Labels de la ligne (un lien par label).
   label: 'a.gl-label-link, a[href*="label_name"]',
 };
