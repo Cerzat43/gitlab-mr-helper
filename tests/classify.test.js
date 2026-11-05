@@ -67,7 +67,8 @@ test('ready prime sur seen, changed et mine', () => {
 
 test('pas ready si un label bloquant reste (Status::* ou Don\'t merge)', () => {
   assert.strictEqual(classifyMr(mr({ approved: true, labels: ['Status::To be tested'], author: 'x' }), 'me', {}), 'neutral');
-  assert.strictEqual(classifyMr(mr({ approved: true, labels: ['Bug', "Don't merge"], author: 'x' }), 'me', {}), 'neutral');
+  // Don't merge est aussi un label « parqué » -> seen d'office (cf. parked-sort.test.js)
+  assert.strictEqual(classifyMr(mr({ approved: true, labels: ['Bug', "Don't merge"], author: 'x' }), 'me', {}), 'seen');
 });
 
 test('pas ready si aucun label bloquant mais non approuvée', () => {

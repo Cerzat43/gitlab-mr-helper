@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GitLab MR Helper
 // @namespace    https://github.com/Cerzat43/gitlab-mr-helper
-// @version      0.2.3
-// @description  Marque les MRs comme vues (grisées), remet en avant celles qui ont bougé depuis, et met en retrait les vôtres.
+// @version      0.3.0
+// @description  Marque les MRs comme vues (grisées), remet en avant celles qui ont bougé depuis, met en retrait les vôtres et trie la liste par état.
 // @author       Cerzat43
 // @homepageURL  https://github.com/Cerzat43/gitlab-mr-helper
 // @supportURL   https://github.com/Cerzat43/gitlab-mr-helper/issues
@@ -54,8 +54,46 @@ function isBlockingLabel(name) {
   return n.startsWith('status::') || /^don['’]?t\s+merge/.test(n);
 }
 
-// Détermine l'état visuel d'une MR. Priorité : ready > seen/changed > mine > neutral.
+// Labels qui « parquent » une MR : rien à faire dessus pour l'instant, elle
+// est donc affichée comme « vue » (grisée) sans marquage manuel. Couvre
+// « Don't merge » et « Status::Work In Progress » ; mêmes tolérances que
+// isBlockingLabel (préfixe décoratif, y compris après le scope Status::).
+function isParkedLabel(name) {
+  if (!name) return false;
+  const n = String(name).replace(/^[^\p{L}]+/u, '').toLowerCase();
+  if (/^don['’]?t\s+merge/.test(n)) return true;
+  if (!n.startsWith('status::')) return false;
+  return /^work\s+in\s+progress/.test(n.slice('status::'.length).replace(/^[^\p{L}]+/u, ''));
+}
+
+// Ordre du tri « par état » (du plus actionnable au moins actionnable).
+const SORT_ORDER = ['ready', 'changed', 'neutral', 'mine', 'seen'];
+
+// Rang de tri d'un état ; un état inconnu est rangé avec 'neutral'.
+function sortRank(state) {
+  const i = SORT_ORDER.indexOf(state);
+  return i === -1 ? SORT_ORDER.indexOf('neutral') : i;
+}
+
+// Comparateur du tri « par état » : rang d'état croissant, puis date de
+// création décroissante (la plus récente d'abord, comme le tri GitLab par
+// défaut). Une date absente/illisible est rangée en dernier dans son état.
+// - a, b : { state, createdAt } — createdAt = date ISO 8601 ou null
+function compareStateSort(a, b) {
+  const r = sortRank(a.state) - sortRank(b.state);
+  if (r !== 0) return r;
+  const ta = Date.parse(a.createdAt);
+  const tb = Date.parse(b.createdAt);
+  const va = Number.isNaN(ta) ? -Infinity : ta;
+  const vb = Number.isNaN(tb) ? -Infinity : tb;
+  if (va === vb) return 0;
+  return vb > va ? 1 : -1;
+}
+
+// Détermine l'état visuel d'une MR. Priorité : ready > parquée > seen/changed > mine > neutral.
 //   - 'ready'   : approuvée ET sans aucun label bloquant -> prête à merger (vert)
+//   - parquée (label isParkedLabel : Don't merge, Status::Work In Progress)
+//                 -> 'seen' d'office, même sans marquage et même si elle a bougé
 //   - le marquage « vue » mémorise le jeton de dernière activité (updateToken) :
 //       jeton identique -> 'seen' (rien n'a bougé, on grise)
 //       jeton différent -> 'changed' (activité depuis la dernière vue, mise en avant ambre)
@@ -66,6 +104,7 @@ function isBlockingLabel(name) {
 // - seenMap     : objet { cléMR: updateToken mémorisé }
 function classifyMr(mr, currentUser, seenMap) {
   if (mr.approved && !(mr.labels || []).some(isBlockingLabel)) return 'ready';
+  if ((mr.labels || []).some(isParkedLabel)) return 'seen';
   if (mr.key && seenMap && mr.key in seenMap) {
     const stored = seenMap[mr.key];
     // Forme actuelle : { token, seenAt } ; forme legacy : le token nu (string).
@@ -161,13 +200,30 @@ const SELECTORS = {
   // Horodatage de dernière activité : un bouton dont le title/aria-label
   // porte la date absolue (texte visible = relatif « mis à jour il y a … »).
   timestamp: '[data-testid="issuable-timestamp"]',
+  // Date de création : <time datetime="ISO"> dans le bouton « créé il y a … ».
+  createdAt: '[data-testid="issuable-created-at"] time[datetime]',
   // Approbation : le widget porte une icône check-circle (approuvée) ou
   // approval-solid (approuvée, dont par l'utilisateur courant). dash-circle =
   // non approuvée. On considère les deux premières comme « approuvée ».
   approvedIcon: '[data-testid="mr-approvals"] [data-testid="check-circle-icon"], [data-testid="mr-approvals"] [data-testid="approval-solid-icon"]',
   // Labels de la ligne (un lien par label).
   label: 'a.gl-label-link, a[href*="label_name"]',
+  // Menu de tri natif (GlSorting / GlCollapsibleListbox, rendu par Vue). Les
+  // items existent dans le DOM même menu fermé.
+  sortRoot: '.gl-sorting',
+  sortListbox: 'ul[role="listbox"]',
+  sortItem: 'li.gl-new-dropdown-item',
+  sortItemText: '.gl-new-dropdown-item-text-wrapper',
+  sortItemCheck: '.gl-new-dropdown-item-check-icon',
+  sortToggle: '[data-testid="base-dropdown-toggle"]',
+  sortToggleText: '[data-testid="base-dropdown-span"]',
 };
+
+// Préfixe chaque sélecteur d'une liste séparée par des virgules
+// (ex. scopeSelectors('html.x', 'a, b', '> li') -> 'html.x a > li, html.x b > li').
+function scopeSelectors(prefix, list, suffix) {
+  return list.split(',').map((sel) => `${prefix} ${sel.trim()} ${suffix || ''}`.trim()).join(', ');
+}
 
 // Lit le jeton de dernière activité d'une ligne : la date absolue portée par
 // le title/aria-label de l'horodatage. Sert de marqueur de version opaque
@@ -176,6 +232,13 @@ function updateTokenFromRow(row) {
   const el = row.querySelector(SELECTORS.timestamp);
   if (!el) return null;
   return el.getAttribute('title') || el.getAttribute('aria-label') || null;
+}
+
+// Lit la date de création ISO d'une ligne (critère secondaire du tri par
+// état). null si introuvable.
+function createdAtFromRow(row) {
+  const el = row.querySelector(SELECTORS.createdAt);
+  return el ? el.getAttribute('datetime') : null;
 }
 
 // Liste les noms exacts des labels d'une ligne. Le nom complet (incl. le
@@ -217,6 +280,7 @@ function parseRow(row) {
     updateToken: updateTokenFromRow(row),
     approved: Boolean(row.querySelector(SELECTORS.approvedIcon)),
     labels: labelNamesFromRow(row),
+    createdAt: createdAtFromRow(row),
   };
 }
 
@@ -261,8 +325,83 @@ function injectStyles() {
     .mrh-bar button:hover {
       background: var(--gl-background-color-strong, #ececef);
     }
-  `;
+  ` + sortStyles();
   document.head.appendChild(style);
+}
+
+// Libellé de notre option dans le menu de tri natif.
+const SORT_LABEL = 'État (MR Helper)';
+
+// CSS du tri « par état ». Conditionné à html[data-mrh-sort="state"] : la
+// liste devient une colonne flex, et chaque ligne porte un `order` inline
+// calculé par applySortOrder (état puis date de création antéchrono). Aucun
+// nœud géré par Vue n'est déplacé (pas de conflit avec son rendu, pas de
+// boucle d'observer). Hors tri par état, la liste n'est pas flex et `order`
+// est sans effet : l'ordre natif s'applique.
+function sortStyles() {
+  const on = 'html[data-mrh-sort="state"]';
+  const rules = [
+    `${scopeSelectors(on, SELECTORS.listContainer)} { display: flex !important; flex-direction: column; }`,
+  ];
+  const root = `${on} ${SELECTORS.sortRoot}`;
+  rules.push(
+    // Coche : sur notre option quand le tri est actif, sinon sur l'option native.
+    `${SELECTORS.sortRoot} .mrh-sort-item ${SELECTORS.sortItemCheck} { visibility: hidden; }`,
+    `${root} .mrh-sort-item ${SELECTORS.sortItemCheck} { visibility: visible; }`,
+    `${root} ${SELECTORS.sortItem}:not(.mrh-sort-item) ${SELECTORS.sortItemCheck} { visibility: hidden; }`,
+    // Libellé du bouton (texte géré par Vue : on le masque et on affiche le nôtre).
+    `${root} ${SELECTORS.sortToggleText} { font-size: 0; }`,
+    `${root} ${SELECTORS.sortToggleText}::after { content: ${JSON.stringify(SORT_LABEL)}; font-size: .875rem; }`,
+  );
+  return '\n' + rules.join('\n');
+}
+
+// Active/désactive le tri par état (attribut sur <html> : hors du sous-arbre
+// Vue, et l'observer ne surveille pas les attributs).
+function setStateSort(active) {
+  const root = document.documentElement;
+  if (active) root.dataset.mrhSort = 'state';
+  else delete root.dataset.mrhSort;
+}
+
+// Ajoute (une seule fois) notre option au menu de tri natif, en clonant un
+// item existant pour hériter du markup/style GitLab (cloneNode ne copie pas
+// les listeners Vue). Clic -> active le tri par état et referme le menu.
+function ensureSortOption() {
+  const sortRoot = document.querySelector(SELECTORS.sortRoot);
+  if (!sortRoot) return;
+  const listbox = sortRoot.querySelector(SELECTORS.sortListbox);
+  if (!listbox || listbox.querySelector('.mrh-sort-item')) return;
+  const model = listbox.querySelector(SELECTORS.sortItem);
+  if (!model) return;
+
+  const item = model.cloneNode(true);
+  item.classList.add('mrh-sort-item');
+  item.removeAttribute('id');
+  item.removeAttribute('aria-selected');
+  item.removeAttribute('data-testid');
+  const text = item.querySelector(SELECTORS.sortItemText);
+  (text || item).textContent = SORT_LABEL;
+  item.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setStateSort(true);
+    const toggle = sortRoot.querySelector(SELECTORS.sortToggle);
+    if (toggle && toggle.getAttribute('aria-expanded') === 'true') toggle.click();
+  });
+  listbox.appendChild(item);
+}
+
+// Un clic sur une option native désactive le tri par état. GitLab recharge
+// alors la liste avec ?sort=… dans l'URL, ce qui le maintient désactivé
+// (cf. main) ; sans paramètre sort, il redevient le tri par défaut.
+function watchNativeSortClicks() {
+  document.addEventListener('click', (e) => {
+    const item = e.target.closest && e.target.closest(SELECTORS.sortItem);
+    if (item && !item.classList.contains('mrh-sort-item') && item.closest(SELECTORS.sortRoot)) {
+      setStateSort(false);
+    }
+  }, true);
 }
 
 // Pose l'état visuel sur la ligne (no-op si déjà à jour, pour ne pas
@@ -272,11 +411,14 @@ function applyState(row, state) {
 }
 
 // Gère le bouton œil de la ligne. Pas d'œil quand il serait inutile :
-// sur les MRs de l'utilisateur, et sur les MRs « ready » (on les merge, on
-// ne les « voit » pas — et ready prime de toute façon sur seen). Si l'œil
+// sur les MRs de l'utilisateur, sur les MRs « ready » (on les merge, on
+// ne les « voit » pas — et ready prime de toute façon sur seen), et sur les
+// MRs parquées (grisées d'office par leur label, l'œil n'y changerait rien). Si l'œil
 // existait et n'a plus lieu d'être (ex. la MR devient ready), on le retire.
 function ensureEyeButton(row, mr, state, store, currentUser, rerender) {
-  const suppressed = state === 'ready' || (currentUser && mr.author === currentUser);
+  const suppressed = state === 'ready'
+    || (currentUser && mr.author === currentUser)
+    || (mr.labels || []).some(isParkedLabel);
   let btn = row.querySelector('.mrh-eye');
   if (suppressed) {
     if (btn) btn.remove();
@@ -301,25 +443,38 @@ function ensureEyeButton(row, mr, state, store, currentUser, rerender) {
 }
 
 // Traite une ligne : extraction -> classification -> décoration.
+// Renvoie { row, state, createdAt } pour le tri (state 'neutral' et
+// createdAt null si la ligne n'a pas pu être lue).
 function processRow(row, store, currentUser, rerender) {
   let mr;
   try {
     mr = parseRow(row);
   } catch (e) {
-    return; // markup inattendu : on ignore cette ligne
+    mr = null; // markup inattendu : on ignore cette ligne
   }
-  if (!mr || !mr.key) return;
+  if (!mr || !mr.key) return { row, state: 'neutral', createdAt: null };
   const state = classifyMr(mr, currentUser, store.all());
   applyState(row, state);
   ensureEyeButton(row, mr, state, store, currentUser, rerender);
+  return { row, state, createdAt: mr.createdAt };
+}
+
+// Pose sur chaque ligne son rang de tri par état en `order` inline (no-op si
+// inchangé). Toujours calculé : sans effet tant que la liste n'est pas flex,
+// et immédiatement juste quand on active le tri.
+function applySortOrder(entries) {
+  entries.slice().sort(compareStateSort).forEach(({ row }, i) => {
+    const order = String(i);
+    if (row.style.order !== order) row.style.order = order;
+  });
 }
 
 // Traite toutes les lignes visibles.
 function processList(store, currentUser) {
   const rerender = () => processList(store, currentUser);
-  document.querySelectorAll(SELECTORS.row).forEach((row) => {
-    processRow(row, store, currentUser, rerender);
-  });
+  const entries = Array.from(document.querySelectorAll(SELECTORS.row))
+    .map((row) => processRow(row, store, currentUser, rerender));
+  applySortOrder(entries);
 }
 
 // Met à jour le compteur de MRs vues (no-op si inchangé).
@@ -381,8 +536,13 @@ function main() {
   const store = createSeenStore(gmStorage);
   store.prune(Date.now(), SEEN_TTL_MS); // purge des marques « vues » périmées
   injectStyles();
+  // Tri par état = tri par défaut, sauf si l'URL porte un tri natif explicite
+  // (choisir une option native recharge la page avec ?sort=…).
+  setStateSort(!new URLSearchParams(location.search).has('sort'));
+  watchNativeSortClicks();
 
   const run = () => {
+    ensureSortOption();
     ensureResetBar(store, currentUser);
     processList(store, currentUser);
   };
@@ -401,7 +561,10 @@ function main() {
  * Export (tests Node) / Bootstrap (navigateur)
  * ------------------------------------------------------------------ */
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { isMrListUrl, usernameFromHref, classifyMr, createSeenStore, isBlockingLabel };
+  module.exports = {
+    isMrListUrl, usernameFromHref, classifyMr, createSeenStore, isBlockingLabel,
+    isParkedLabel, sortRank, SORT_ORDER, compareStateSort,
+  };
 } else if (typeof window !== 'undefined') {
   main();
 }
