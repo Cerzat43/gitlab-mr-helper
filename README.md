@@ -10,6 +10,7 @@ Userscript Tampermonkey qui améliore les listes de merge requests sur gitlab.co
 - met en retrait vos propres MRs (avec un repère visuel distinct) ;
 - grise d'office les MRs « parquées » (label `Don't merge` ou `Status::Work In Progress`) ;
 - **trie la liste par état** (tri par défaut, ajouté au menu de tri natif) ;
+- **filtre la liste par état** via des boutons colorés avec compteur, à droite des onglets ;
 - fournit un bouton pour réinitialiser toutes les MRs vues.
 
 Aucun appel API, aucun token : tout se base sur le contenu de la page. Le suivi
@@ -51,6 +52,14 @@ défaut : prête à merger → changée → neutre → mes MRs → vue, puis par
 création (la plus récente d'abord) au sein d'un même état. Choisir une option native la désactive ;
 elle reste désactivée tant que l'URL porte un `?sort=…`. Le tri ne porte que
 sur la page affichée.
+
+### Filtres par état
+
+À droite des onglets Ouvert / Fusionnées / Fermé / Tous, cinq boutons aux
+couleurs des états — **Prêtes à merger, Changées, À review, Mes MRs, En attente** —
+affichent le nombre de MRs de la page dans chaque état. Un clic n'affiche que
+cet état ; un re-clic réaffiche tout. Le filtre ne porte que sur la page
+affichée et n'est pas conservé au rechargement.
 
 « Approuvée » inclut le cas où **vous** avez approuvé. La liste des labels
 bloquants est centralisée dans la fonction `isBlockingLabel` du script.

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GitLab MR Helper
 // @namespace    https://github.com/Cerzat43/gitlab-mr-helper
-// @version      0.3.0
-// @description  Marque les MRs comme vues (grisées), remet en avant celles qui ont bougé depuis, met en retrait les vôtres et trie la liste par état.
+// @version      0.4.0
+// @description  Marque les MRs comme vues (grisées), remet en avant celles qui ont bougé depuis, met en retrait les vôtres, trie et filtre la liste par état.
 // @author       Cerzat43
 // @homepageURL  https://github.com/Cerzat43/gitlab-mr-helper
 // @supportURL   https://github.com/Cerzat43/gitlab-mr-helper/issues
@@ -73,6 +73,19 @@ const SORT_ORDER = ['ready', 'changed', 'neutral', 'mine', 'seen'];
 function sortRank(state) {
   const i = SORT_ORDER.indexOf(state);
   return i === -1 ? SORT_ORDER.indexOf('neutral') : i;
+}
+
+// États proposés en filtre (boutons à droite des onglets d'état GitLab),
+// dans l'ordre du tri.
+const FILTER_STATES = SORT_ORDER;
+
+// Dénombre les états filtrables dans une liste d'états ({ ready: n, … },
+// 0 par défaut ; les états non filtrables sont ignorés).
+function countStates(states) {
+  const counts = {};
+  FILTER_STATES.forEach((s) => { counts[s] = 0; });
+  states.forEach((s) => { if (s in counts) counts[s] += 1; });
+  return counts;
 }
 
 // Comparateur du tri « par état » : rang d'état croissant, puis date de
@@ -217,6 +230,10 @@ const SELECTORS = {
   sortItemCheck: '.gl-new-dropdown-item-check-icon',
   sortToggle: '[data-testid="base-dropdown-toggle"]',
   sortToggleText: '[data-testid="base-dropdown-span"]',
+  // Onglets d'état natifs (Ouvert / Fusionnées / Fermé / Tous) : conteneur
+  // flex et wrapper des onglets, après lequel on insère nos filtres.
+  stateTabs: '.issuable-state-filters',
+  stateTabsNav: '.gl-tabs-wrapper',
 };
 
 // Préfixe chaque sélecteur d'une liste séparée par des virgules
@@ -325,7 +342,7 @@ function injectStyles() {
     .mrh-bar button:hover {
       background: var(--gl-background-color-strong, #ececef);
     }
-  ` + sortStyles();
+  ` + sortStyles() + filterStyles();
   document.head.appendChild(style);
 }
 
@@ -354,6 +371,103 @@ function sortStyles() {
     `${root} ${SELECTORS.sortToggleText}::after { content: ${JSON.stringify(SORT_LABEL)}; font-size: .875rem; }`,
   );
   return '\n' + rules.join('\n');
+}
+
+// Présentation des filtres : libellé + couleur (identique au rendu des lignes).
+const FILTER_META = {
+  ready:   { label: 'Prêtes à merger', color: '#108548' },
+  changed: { label: 'Changées',        color: '#c17d10' },
+  neutral: { label: 'À review',        color: 'var(--gl-text-color-default, #303030)',
+             fg: 'var(--gl-background-color-default, #fff)' },
+  mine:    { label: 'Mes MRs',         color: 'var(--gl-border-color-strong, #b3b3b3)', dashed: true },
+  seen:    { label: 'En attente',      color: 'var(--gl-text-color-subtle, #737278)' },
+};
+
+// CSS des filtres d'état. Le filtrage est purement CSS : avec
+// html[data-mrh-filter="<état>"], les lignes d'un autre état sont masquées
+// (aucun nœud Vue retiré ni déplacé).
+function filterStyles() {
+  const rules = [`
+    .mrh-filters { display: flex; align-items: center; gap: 6px; margin-left: 12px; flex-wrap: wrap; }
+    .mrh-filter {
+      cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+      padding: 2px 10px; border-radius: 999px; font-size: 13px; line-height: 20px;
+      color: var(--gl-text-color-default, #303030);
+      background: var(--gl-background-color-default, #fff);
+      border: 1px solid var(--mrh-c);
+    }
+    .mrh-filter[data-dashed="1"] { border-style: dashed; }
+    .mrh-filter:hover { background: var(--gl-background-color-strong, #ececef); }
+    .mrh-filter-count {
+      min-width: 18px; padding: 0 5px; border-radius: 999px; text-align: center;
+      font-weight: 600; color: var(--mrh-fg, #fff); background: var(--mrh-c);
+    }
+    .mrh-filter[aria-pressed="true"] { color: var(--mrh-fg, #fff); background: var(--mrh-c); }
+    .mrh-filter[aria-pressed="true"] .mrh-filter-count {
+      color: var(--mrh-c); background: var(--mrh-fg, #fff);
+    }
+    .mrh-filter[data-count="0"] { opacity: .5; }`];
+  FILTER_STATES.forEach((state) => {
+    rules.push(`${scopeSelectors(`html[data-mrh-filter="${state}"]`, SELECTORS.listContainer, `> :not([data-mrh-state="${state}"])`)} { display: none !important; }`);
+  });
+  return '\n' + rules.join('\n');
+}
+
+// Applique (ou retire, state = null) le filtre d'état et synchronise les boutons.
+function setStateFilter(state) {
+  const root = document.documentElement;
+  if (state) root.dataset.mrhFilter = state;
+  else delete root.dataset.mrhFilter;
+  document.querySelectorAll('.mrh-filter').forEach((btn) => {
+    btn.setAttribute('aria-pressed', btn.dataset.state === state ? 'true' : 'false');
+  });
+}
+
+// Injecte (une seule fois) les boutons de filtre à droite des onglets d'état.
+// Clic : filtre sur cet état ; re-clic sur le filtre actif : tout afficher.
+function ensureFilterBar() {
+  if (document.querySelector('.mrh-filters')) return;
+  const tabs = document.querySelector(SELECTORS.stateTabs);
+  const nav = tabs && tabs.querySelector(SELECTORS.stateTabsNav);
+  if (!nav) return;
+
+  const bar = document.createElement('div');
+  bar.className = 'mrh-filters';
+  const active = document.documentElement.dataset.mrhFilter || null;
+  FILTER_STATES.forEach((state) => {
+    const meta = FILTER_META[state];
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'mrh-filter';
+    btn.dataset.state = state;
+    if (meta.dashed) btn.dataset.dashed = '1';
+    btn.style.setProperty('--mrh-c', meta.color);
+    if (meta.fg) btn.style.setProperty('--mrh-fg', meta.fg);
+    btn.setAttribute('aria-pressed', state === active ? 'true' : 'false');
+    btn.title = `N'afficher que : ${meta.label} (re-cliquer pour tout afficher)`;
+    const label = document.createElement('span');
+    label.textContent = meta.label;
+    const count = document.createElement('span');
+    count.className = 'mrh-filter-count';
+    btn.append(label, count);
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const current = document.documentElement.dataset.mrhFilter || null;
+      setStateFilter(current === state ? null : state);
+    });
+    bar.appendChild(btn);
+  });
+  nav.after(bar);
+}
+
+// Met à jour les compteurs des filtres (no-op si inchangés).
+function updateFilterCounts(counts) {
+  document.querySelectorAll('.mrh-filter').forEach((btn) => {
+    const n = String(counts[btn.dataset.state] || 0);
+    const el = btn.querySelector('.mrh-filter-count');
+    if (el && el.textContent !== n) el.textContent = n;
+    if (btn.dataset.count !== n) btn.dataset.count = n;
+  });
 }
 
 // Active/désactive le tri par état (attribut sur <html> : hors du sous-arbre
@@ -475,6 +589,7 @@ function processList(store, currentUser) {
   const entries = Array.from(document.querySelectorAll(SELECTORS.row))
     .map((row) => processRow(row, store, currentUser, rerender));
   applySortOrder(entries);
+  updateFilterCounts(countStates(entries.map((e) => e.state)));
 }
 
 // Met à jour le compteur de MRs vues (no-op si inchangé).
@@ -543,6 +658,7 @@ function main() {
 
   const run = () => {
     ensureSortOption();
+    ensureFilterBar();
     ensureResetBar(store, currentUser);
     processList(store, currentUser);
   };
@@ -563,7 +679,7 @@ function main() {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     isMrListUrl, usernameFromHref, classifyMr, createSeenStore, isBlockingLabel,
-    isParkedLabel, sortRank, SORT_ORDER, compareStateSort,
+    isParkedLabel, sortRank, SORT_ORDER, compareStateSort, FILTER_STATES, countStates,
   };
 } else if (typeof window !== 'undefined') {
   main();
